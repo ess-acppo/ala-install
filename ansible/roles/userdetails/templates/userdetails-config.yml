@@ -6,6 +6,7 @@ security:
     loginUrl: ${security.cas.casServerUrlPrefix}/login
     logoutUrl: ${security.cas.casServerUrlPrefix}/logout
     appServerName: {{ userdetails_server_name }}
+    authCookieName: {{ auth_cookie_name | default('ALA-Auth') }}
   user:
     name: {{ userdetails_endpoint_user | default('admin') }}
     password: {{ userdetails_endpoint_password | default('secret') }}
@@ -36,16 +37,29 @@ redirectAfterFirstLogin: ${grails.serverURL}/myprofile
 # Data source configuration
 dataSource:
   dbCreate: "none"
-  url: jdbc:mysql://{{ cas_db_hostname | default('localhost') }}:{{ cas_db_port | default('3306') }}/{{ cas_db_name | default('emmet') }}?serverTimezone={{ server_tz | default('Australia/Sydney') }}&zeroDateTimeBehavior=convertToNull
+  url: jdbc:mysql://{{ cas_db_hostname | default('localhost') }}:{{ cas_db_port | default('3306') }}/{{ cas_db_name | default('emmet') }}?serverTimezone={{ server_tz | default('Australia/Sydney') }}&zeroDateTimeBehavior=convertToNull&characterEncoding=UTF-8
   username: {{ userdetails_db_username | default(cas_db_username) | default('cas') }}
   password: {{ userdetails_db_password | default(cas_db_password) | default('password') }}
 
 oauth:
   providers:
+{% if oauth_providers_flickr_enabled | default('true') | bool %}
     flickr:
+      enabled: true
       key: {{ oauth_providers_flickr_key }}
       secret: {{ oauth_providers_flickr_secret }}
       callback: ${grails.serverURL}/profile/flickrCallback
+{% endif %}
+{% if oauth_providers_inaturalist_enabled | default('false') | bool %}
+    inaturalist:
+      enabled: true
+      key: {{ oauth_providers_inaturalist_key | default('DISABLED') }}
+      secret: {{ oauth_providers_inaturalist_secret | default('DISABLED') }}
+      callback: ${grails.serverURL}/profile/inaturalistCallback
+inaturalist:
+  name: {{ inaturalist_name | default('iNaturalist Australia') }}
+  baseUrl: {{ inaturalist_base_url | default('https://inaturalist.ala.org.au/') }}
+{% endif %}
 password:
   encoder: {{ user_store_db_encoder | default('bcrypt') }} # or legacy
 bcrypt:
@@ -54,21 +68,25 @@ bcrypt:
 #  algorithm: {{ user_store_db_encoding_algorithm }}
 #  salt: {{ user_store_db_encoding_salt }}
 
-
+recaptcha:
+  baseUrl: {{ recaptcha_base_url | default('https://www.google.com/recaptcha/api/') }}
+  siteKey: {{ userdetails_recaptcha_site_key | default('') }}
+  secretKey: {{ userdetails_recaptcha_secret_key | default('') }}
 
 ala:
-  baseURL: {{ ala_baseurl | default('https://www.ala.org.au') }}
+  baseURL: {{ ala_base_url | default('https://www.ala.org.au') }}
 
 supportEmail: {{ support_email | default('support@ala.org.au') }}
-homeUrl: {{ ala_baseurl | default('https://www.ala.org.au') }}
+homeUrl: {{ ala_base_url | default('https://www.ala.org.au') }}
 mainTitle: {{ orgNameLong | default('Atlas of Living Australia') }}
 emailSenderTitle: {{ orgNameLong | default('Atlas of Living Australia') }}
 emailSender: {{ support_email | default('support@ala.org.au') }}
 
 sightings.url: {{ sightings_base_url }}/mine
-spatial.url: {{ spatial_base_url }}/actions/dashboard
+spatial.url: {{ spatial_base_url }}?tool=log
 volunteer.url: {{ volunteer_base_url }}/user/myStats
 lists.url: {{ lists_base_url }}/speciesList/list
+biocache.search.baseUrl: {{ biocache_base_url }}/occurrences/search
 biocache.search.url: {{ biocache_base_url }}/occurrences/search/?q=*%3A*&fq=assertion_user_id%3A
 biocache.myDownloads.url: {{ biocache_base_url }}/download/myDownloads/
 alerts.url: {{ alerts_base_url }}
@@ -78,7 +96,9 @@ userDetails:
   url: {{ userdetails_base_url }}/{{ userdetails_context_path | default('userdetails') }}/
 
 # Header and footer
-headerAndFooter.baseURL: {{ header_and_footer_baseurl | default('https://www.ala.org.au/commonui-bs3')}}
+headerAndFooter:
+  baseURL: {{ header_and_footer_baseurl | default('https://www.ala.org.au/commonui-bs3')}}
+  version: {{ header_and_footer_version | default('1')}}
 ala.baseURL: {{ ala_base_url | default('https://www.ala.org.au')}}
 bie.baseURL: {{ bie_base_url | default('https://bie.ala.org.au')}}
 bie.searchPath: {{ bie_search_path | default('/search') }}
@@ -97,6 +117,7 @@ webservice.apiKey: {{ api_key }}
 admin.export.csv.primary.fields: {{ admin_export_csv_primary_fields | default('id,userName,firstName,lastName,email,activated,locked,created')}}
 
 spring:
+{% if bootadmin_enabled | bool %}
   boot:
     admin:
       url: {{ bootadmin_url | default('https://bootadmin.ala.org.au') }}
@@ -104,13 +125,14 @@ spring:
       password: {{ bootadmin_password }}
       client:
         enabled: true
-        service-base-url: ${grails.serverURL}
-        managementUrl: ${grails.serverURL}/status
+        service-url: {{ bootadmin_client_base_url | default('${serverURL}/') }}{{ userdetails_context_path | default('userdetails') }}
+        management-url: {{ bootadmin_client_base_url | default('${serverURL}/') }}{{ userdetails_context_path | default('userdetails') }}/status
         name: {{ userdetails_bootadmin_client_name | default('User Details') }}
         metadata:
           user:
             name: ${security.user.name}
             password: ${security.user.password}
+{% endif %}
   session:
     store-type: {{ spring_session_store_type | default('none') }}
     {% if spring_session_store_type == 'redis' %}disable-redis-config-action: {{ is_secured_redis | default('false') | bool }}
@@ -120,8 +142,8 @@ spring:
     host: {{ spring_session_redis_host }}
     password: {{ spring_session_redis_password }}
     port: {{ spring_session_redis_port | default('6379') }}
-    {% if spring_session_redis_clustered is sameas true %}
+{% if spring_session_redis_clustered | bool %}
     cluster:
       nodes: {{ spring_session_redis_host }}:{{ spring_session_redis_port | default('6379') }}
-    {% endif %}
+{% endif %}
 {% endif %}

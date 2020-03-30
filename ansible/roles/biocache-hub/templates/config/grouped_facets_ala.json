@@ -179,6 +179,10 @@
             },
             {  
                 "sort":"count",
+                "field":"cl1049"
+            },
+            {  
+                "sort":"count",
                 "field":"cl966"
             },
             {  
@@ -295,6 +299,10 @@
             {  
                 "sort":"count",
                 "field":"data_resource_uid"
+            },
+            {  
+                "sort":"count",
+                "field":"dataset_name"
             }
         ]
     }

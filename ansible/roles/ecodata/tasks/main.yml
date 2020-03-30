@@ -2,15 +2,44 @@
   tags:
     - ecodata
     - deploy
+
+- name: set ecodata_user as default value
+  set_fact:
+    ecodata_user: "{{ (exec_jar) | ternary ('ecodata', 'tomcat')}}"
+  tags:
+    - ecodata
+    - deploy
+
 #
 # External configuration directories and files
 #
 - name: ensure target directories exist [data subdirectories etc.]
-  file: path={{item}} state=directory owner={{tomcat_user}} group={{tomcat_user}}
+  file: path={{item}} state=directory owner='mongodb' group='mongodb'
+  with_items:
+    - "{{data_dir}}/mongodb"
+  tags:
+    - properties
+    - ecodata
+
+- name: add jar and service
+  include_role:
+    name: exec-jar
+  vars:
+    service_name: "ecodata"
+    jar_url: '{{ ecodata_artifact_url }}'
+  tags:
+    - deploy
+    - service
+    - ecodata
+  when: exec_jar
+
+- name: ensure target directories exist [data subdirectories etc.]
+  file: path={{item}} state=directory owner={{ecodata_user}} group={{ecodata_user}}
   with_items:
     - "{{data_dir}}/ecodata/config"
     - "{{data_dir}}/ecodata/uploads"
     - "{{data_dir}}/ecodata/models"
+    - "{{data_dir}}/ecodata/elasticsearch"
   tags:
     - properties
     - ecodata
@@ -20,6 +49,36 @@
   tags:
     - properties
     - ecodata
+
+- name: copy logback config
+  template:
+    src: logback.groovy
+    dest: "{{data_dir}}/ecodata/config/logback.groovy"
+    owner: ecodata
+    group: ecodata
+  notify:
+    - restart ecodata
+  tags:
+    - properties
+    - ecodata
+
+- name: ensure ecodata log directory exists
+  file: path={{item}} state=directory owner={{ecodata_user}} group={{ecodata_user}}
+  with_items:
+    - "/var/log/atlas/ecodata"
+  tags:
+    - properties
+    - ecodata
+  when: exec_jar
+
+- name: set ecodata log ownership
+  file: path=/var/log/atlas/ecodata owner='{{ecodata_user}}' group='{{ecodata_user}}' recurse=true
+  notify:
+    - restart ecodata
+  tags:
+    - properties
+    - ecodata
+  when: exec_jar
 
 #
 # Copy sensitive data xml file
@@ -41,9 +100,9 @@
 
 
 - name: set data ownership
-  file: path={{data_dir}}/ecodata owner={{tomcat_user}} group={{tomcat_user}} recurse=true
+  file: path={{data_dir}}/ecodata owner='{{ecodata_user}}' group='{{ecodata_user}}' recurse=true
   notify:
-    - restart tomcat
+    - restart ecodata
   tags:
     - properties
     - ecodata
@@ -59,6 +118,15 @@
     - ecodata
   when: not webserver_nginx
 
+- name: set nginx proxy target if configured
+  set_fact:
+    ecodata_proxy_target: "{{ecodata_context_path}}"
+  tags:
+    - nginx_vhost
+    - deploy
+    - ecodata
+  when: webserver_nginx and ecodata_proxy_target is not defined
+
 - name: add nginx vhost if configured
   include_role:
     name: nginx_vhost
@@ -66,17 +134,46 @@
     appname: "ecodata"
     hostname: "{{ ecodata_hostname }}"
     context_path: "{{ ecodata_context_path }}"
+    tomcat_server_port: "{{ ecodata_server_port }}"
+    nginx_paths:
+      - path: "{{ecodata_proxy_target}}/uploads"
+        sort_label: "1_upload"
+        is_proxy: false
+        alias: "{{ upload_dir | default('/data/ecodata/uploads') }}"
+      - path: "{{ecodata_context_path}}"
+        sort_label: "2_ws"
+        is_proxy: true
+        proxy_pass: "http://127.0.0.1:{{ ecodata_server_port }}{{ecodata_proxy_target}}"
   tags:
     - nginx_vhost
     - deploy
     - ecodata
   when: webserver_nginx
 
+
+
+#- name: Serve ecodata uploads from nginx
+#  blockinfile:
+#    path: /etc/nginx/sites-enabled/{{ ecodata_hostname }}.conf
+#    backup: yes
+#    marker: '# {mark} Serve uploaded files using nginx'
+#    insertbefore: '^.*location'
+#    block:
+#      location ^~ /uploads {
+#        alias /data/ecodata/uploads;
+#      }
+#  tags:
+#    - nginx_vhost
+#    - deploy
+#    - ecodata
+#  when: webserver_nginx
+
 - include: ../../tomcat_deploy/tasks/main.yml war_url='{{ ecodata_war_url }}' context_path='{{ecodata_context_path}}' hostname='{{ ecodata_hostname }}'
   tags:
     - deploy
     - tomcat_vhost
     - ecodata
+  when: not exec_jar
 
 #
 # Override the default memory settings for Tomcat to increase heap space and change the garbage collector
@@ -92,9 +189,29 @@
     - ecodata
     - deploy
     - tomcat
+  when: not exec_jar
 
 #
 # Cron Job configuration
 #
 - name: install cron job for indexing elastic search
   cron: minute=21 hour=22 name="Elastic search indexing" job="wget -O - {{ ecodata_url }}{{ ecodata_context_path }}/admin/reIndexAll >/dev/null 2>&1" user=root state=present
+
+
+# Mongo users and database
+- name: Create the ecodata database and user
+  mongodb_user:
+    login_user: "{{ mongodb_root_username }}"
+    login_password: "{{ mongodb_root_password }}"
+    login_port: "{{ mongodb_port }}"
+    database: "{{ ecodata_database }}"
+    name: "{{ ecodata_username }}"
+    password: "{{ ecodata_password }}"
+    roles:
+      - { db: "{{ ecodata_database }}", role: "dbAdmin" }
+      - { db: "{{ ecodata_database }}", role: "readWrite" }
+  tags:
+    - mongodb-org
+
+
+

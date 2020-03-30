@@ -1,0 +1,103 @@
+- name: Add mongodb.org apt key for version 4.0
+  apt_key:
+    keyserver: hkp://keyserver.ubuntu.com:80
+    id: 9DA31620334BD75D9DCB49F368818C72E52529D4
+  when: mongodb_version == 4.0
+  tags: mongodb-org
+
+- name: Add mongodb.org apt key for version 3.4
+  apt_key:
+    keyserver: hkp://keyserver.ubuntu.com:80
+    id: 0c49f3730359a14518585931bc711f9ba15703c6
+  when: mongodb_version == 3.4
+  tags: mongodb-org
+
+- name: Add mongodb.org repo
+  apt_repository:
+    repo: deb [ arch=amd64 ] https://repo.mongodb.org/apt/ubuntu {{ ansible_distribution_release }}/mongodb-org/{{ mongodb_version }} multiverse
+    state: present
+  tags: mongodb-org
+
+- name: Install mongodb.org packages and related
+  apt:
+    name: ['mongodb-org-shell', 'mongodb-org-server', 'mongodb-org-tools', 'python-pip']
+  tags: mongodb-org
+
+# https://github.com/ansible/ansible/issues/36585
+- name: force systemd to reread configs
+  systemd:
+    daemon_reload: yes
+
+- name: ensure target directories exist [data subdirectories etc.]
+  file: path={{item}} state=directory owner='mongodb' group='mongodb'
+  with_items:
+    - "{{ dbPath }}"
+  tags:
+    - mongodb-org
+
+- name: Set configuration pointing to passed in dbPath
+  template:
+    src: templates/mongod.yml
+    dest: /etc/mongod.conf
+  tags: mongodb-org
+
+- name: Restart mongod
+  service: name=mongod state=restarted daemon-reload=true
+  when: ansible_os_family == "Debian"
+  tags: mongodb-org
+
+- name: Uninstall official python-pymongo package
+  apt:
+    name: python-pymongo
+    state: absent
+  tags: mongodb-org
+
+- name: Install pip python-pymongo package
+  pip:
+    name: pymongo
+  tags: mongodb-org
+
+- name: Enable service mongod
+  service:
+    name: mongod
+    enabled: yes
+  tags: mongodb-org
+
+
+
+# https://github.com/ansible/ansible/issues/33832
+- name: Check if some admin user is already configured (if admin already exists this fails and can be ignored)
+  shell: /usr/bin/mongo --eval 'db.getUsers()' admin
+  ignore_errors: true
+  register: get_mongo_admin_users
+  changed_when: false
+  tags: mongodb-org
+
+- name: Debug admin query
+  debug:
+    msg: "Mongo admin query output: {{ get_mongo_admin_users.rc }}, stdout if any: {{ get_mongo_admin_users.stdout }}. If equals 0 and no error in command: not admin users configured"
+  tags: mongodb-org
+
+# https://docs.ansible.com/ansible/latest/modules/mongodb_user_module.html
+- name: Create admin user if necessary
+  mongodb_user:
+    database: "{{ mongodb_root_database | default('admin') }}"
+    name: "{{ mongodb_root_username }}"
+    password: "{{ mongodb_root_password }}"
+    state: present
+    login_port: "{{ mongodb_port }}"
+    roles: "userAdminAnyDatabase"
+  when: get_mongo_admin_users.rc == 0
+  tags: mongodb-org
+
+- name: Enable security
+  blockinfile:
+    path: /etc/mongod.conf
+    backup: yes
+    marker: '# {mark} Enable mongodb security authorization'
+    block: |
+      security:
+        authorization: enabled
+  notify:
+    - restart mongod
+  tags: mongodb-org
